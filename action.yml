@@ -1,0 +1,202 @@
+name: 'Manage Azure Storage CORS'
+description: 'Add or remove CORS rules for Azure Blob Storage. Requires Azure CLI login before use.'
+author: 'James Consulting LLC'
+branding:
+  icon: 'globe'
+  color: 'green'
+
+inputs:
+  action:
+    description: 'Action to perform: "add" or "remove"'
+    required: true
+  storage-account:
+    description: 'Azure Storage account name'
+    required: true
+  storage-account-key:
+    description: 'Azure Storage account key'
+    required: true
+  origin:
+    description: 'Origin URL to add/remove (e.g., https://myapp.azurestaticapps.net)'
+    required: true
+  methods:
+    description: 'Allowed HTTP methods (space-separated). Valid: DELETE GET HEAD MERGE OPTIONS POST PUT PATCH CONNECT TRACE'
+    required: false
+    default: 'DELETE GET HEAD MERGE OPTIONS POST PUT'
+  allowed-headers:
+    description: 'Allowed headers'
+    required: false
+    default: '*'
+  exposed-headers:
+    description: 'Exposed headers'
+    required: false
+    default: '*'
+  max-age:
+    description: 'Max age in seconds for preflight cache'
+    required: false
+    default: '3600'
+
+outputs:
+  cors-updated:
+    description: 'Whether CORS rules were updated'
+    value: ${{ steps.manage-cors.outputs.updated }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Manage CORS Rules
+      id: manage-cors
+      shell: bash
+      env:
+        STORAGE_ACCOUNT: ${{ inputs.storage-account }}
+        STORAGE_ACCOUNT_KEY: ${{ inputs.storage-account-key }}
+        ORIGIN: ${{ inputs.origin }}
+        ACTION: ${{ inputs.action }}
+        METHODS: ${{ inputs.methods }}
+        ALLOWED_HEADERS: ${{ inputs.allowed-headers }}
+        EXPOSED_HEADERS: ${{ inputs.exposed-headers }}
+        MAX_AGE: ${{ inputs.max-age }}
+      run: |
+        if [[ -z "$STORAGE_ACCOUNT_KEY" ]]; then
+          echo "::warning::Storage account key not provided, skipping CORS management"
+          echo "updated=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "Managing CORS for origin: $ORIGIN (action: $ACTION)"
+
+        # Get current CORS rules
+        CORS_RULES=$(az storage cors list \
+          --account-name "$STORAGE_ACCOUNT" \
+          --account-key "$STORAGE_ACCOUNT_KEY" \
+          --services b \
+          -o json 2>/dev/null || echo "[]")
+
+        echo "Current CORS rules:"
+        echo "$CORS_RULES" | jq '.'
+
+        if [[ "$ACTION" == "add" ]]; then
+          # Check if origin already exists (using capitalized property names from Azure)
+          ORIGIN_EXISTS=$(echo "$CORS_RULES" | jq -r --arg url "$ORIGIN" \
+            '[.[].AllowedOrigins] | flatten | any(. == $url)' 2>/dev/null || echo "false")
+
+          if [[ "$ORIGIN_EXISTS" == "true" ]]; then
+            echo "CORS rule already exists for $ORIGIN"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Adding CORS rule for $ORIGIN"
+
+          # Strip spaces from methods for Azure CLI
+          methods=$(echo "$METHODS" | tr -d ' ')
+
+          # Count existing rules (Azure allows max 5)
+          RULE_COUNT=$(echo "$CORS_RULES" | jq '. | length' 2>/dev/null || echo "0")
+
+          if [[ $RULE_COUNT -ge 5 ]]; then
+            echo "Maximum CORS rules (5) reached. Consolidating origins..."
+
+            # Extract all unique origins and add new one
+            ALL_ORIGINS=$(echo "$CORS_RULES" | jq -r --arg url "$ORIGIN" \
+              '([.[].AllowedOrigins] | flatten | unique) + [$url] | join(",")' 2>/dev/null)
+
+            # Clear and add consolidated rule
+            az storage cors clear \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$STORAGE_ACCOUNT_KEY" \
+              --services b
+
+            az storage cors add \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$STORAGE_ACCOUNT_KEY" \
+              --services b \
+              --methods $methods \
+              --origins "$ALL_ORIGINS" \
+              --allowed-headers "$ALLOWED_HEADERS" \
+              --exposed-headers "$EXPOSED_HEADERS" \
+              --max-age "$MAX_AGE"
+
+            echo "Consolidated all origins into single CORS rule"
+          else
+            # Add as new rule
+            az storage cors add \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$STORAGE_ACCOUNT_KEY" \
+              --services b \
+              --methods $methods \
+              --origins "$ORIGIN" \
+              --allowed-headers "$ALLOWED_HEADERS" \
+              --exposed-headers "$EXPOSED_HEADERS" \
+              --max-age "$MAX_AGE"
+          fi
+
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+
+        elif [[ "$ACTION" == "remove" ]]; then
+          # Check if origin exists
+          ORIGIN_EXISTS=$(echo "$CORS_RULES" | jq -r --arg url "$ORIGIN" \
+            '[.[].AllowedOrigins] | flatten | any(. == $url)' 2>/dev/null || echo "false")
+
+          if [[ "$ORIGIN_EXISTS" != "true" ]]; then
+            echo "No CORS rule found for $ORIGIN"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Removing CORS rule for $ORIGIN"
+
+          # Clear all rules
+          az storage cors clear \
+            --account-name "$STORAGE_ACCOUNT" \
+            --account-key "$STORAGE_ACCOUNT_KEY" \
+            --services b
+
+          # Re-add all rules except the one being removed
+          echo "$CORS_RULES" | jq -c '.[]' | while read -r rule; do
+            origins=$(echo "$rule" | jq -r '.AllowedOrigins // empty')
+
+            # Skip if this rule contains only the URL we want to remove
+            if [[ "$origins" == "$ORIGIN" ]]; then
+              echo "Removing rule with origin: $ORIGIN"
+              continue
+            fi
+
+            # If rule has multiple origins, filter out the one to remove
+            if echo "$origins" | grep -q ","; then
+              origins=$(echo "$origins" | tr ',' '\n' | grep -v "^${ORIGIN}$" | tr '\n' ',' | sed 's/,$//')
+            fi
+
+            # Skip if origins became empty
+            if [[ -z "$origins" ]]; then
+              continue
+            fi
+
+            methods=$(echo "$rule" | jq -r '.AllowedMethods // "GET,PUT,POST,DELETE,HEAD,OPTIONS"' | tr -d ' ')
+            allowed_headers=$(echo "$rule" | jq -r '.AllowedHeaders // "*"')
+            exposed_headers=$(echo "$rule" | jq -r '.ExposedHeaders // "*"')
+            max_age=$(echo "$rule" | jq -r '.MaxAgeInSeconds // 3600')
+
+            echo "Re-adding CORS rule for: $origins"
+            az storage cors add \
+              --account-name "$STORAGE_ACCOUNT" \
+              --account-key "$STORAGE_ACCOUNT_KEY" \
+              --services b \
+              --methods $methods \
+              --origins "$origins" \
+              --allowed-headers "$allowed_headers" \
+              --exposed-headers "$exposed_headers" \
+              --max-age "$max_age"
+          done
+
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+
+        else
+          echo "::error::Invalid action: $ACTION. Must be 'add' or 'remove'"
+          exit 1
+        fi
+
+        echo "Final CORS rules:"
+        az storage cors list \
+          --account-name "$STORAGE_ACCOUNT" \
+          --account-key "$STORAGE_ACCOUNT_KEY" \
+          --services b -o table
