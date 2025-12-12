@@ -52,14 +52,14 @@ A GitHub Action to manage CORS (Cross-Origin Resource Sharing) rules for Azure B
 | `storage-account` | Azure Storage account name | Yes | - |
 | `storage-account-key` | Azure Storage account key | Yes | - |
 | `origin` | Origin URL to add/remove | Yes | - |
-| `methods` | Allowed HTTP methods (space-separated) | No | `DELETE GET HEAD MERGE OPTIONS POST PUT` |
+| `methods` | Allowed HTTP methods (space or comma-separated) | No | `DELETE GET HEAD MERGE OPTIONS POST PUT` |
 | `allowed-headers` | Allowed headers pattern | No | `*` |
 | `exposed-headers` | Exposed headers pattern | No | `*` |
 | `max-age` | Max age in seconds for preflight cache | No | `3600` |
 
 ### Valid HTTP Methods
 
-The following HTTP methods are valid for Azure Storage CORS:
+The following HTTP methods are valid for Azure Storage CORS (can be space or comma-separated):
 
 `DELETE` `GET` `HEAD` `MERGE` `OPTIONS` `POST` `PUT` `PATCH` `CONNECT` `TRACE`
 
