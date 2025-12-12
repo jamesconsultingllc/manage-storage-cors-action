@@ -19,9 +19,9 @@ inputs:
     description: 'Origin URL to add/remove (e.g., https://myapp.azurestaticapps.net)'
     required: true
   methods:
-    description: 'Allowed HTTP methods (comma or space-separated). Valid: DELETE, GET, HEAD, MERGE, OPTIONS, POST, PUT, PATCH, CONNECT, TRACE'
+    description: 'Allowed HTTP methods (space or comma-separated). Valid: DELETE, GET, HEAD, MERGE, OPTIONS, POST, PUT, PATCH, CONNECT, TRACE'
     required: false
-    default: 'DELETE,GET,HEAD,MERGE,OPTIONS,POST,PUT'
+    default: 'DELETE GET HEAD MERGE OPTIONS POST PUT'
   allowed-headers:
     description: 'Allowed headers'
     required: false
@@ -87,9 +87,9 @@ runs:
 
           echo "Adding CORS rule for $ORIGIN"
 
-          # Convert space-separated methods to comma-separated if needed (accept both formats)
-          if [[ "$METHODS" == *" "* ]]; then
-            METHODS=$(echo "$METHODS" | tr ' ' ',')
+          # Convert comma-separated methods to space-separated if needed (Azure CLI expects spaces)
+          if [[ "$METHODS" == *","* ]]; then
+            METHODS=$(echo "$METHODS" | tr ',' ' ')
           fi
 
           # Count existing rules (Azure allows max 5)
@@ -112,7 +112,7 @@ runs:
               --account-name "$STORAGE_ACCOUNT" \
               --account-key "$STORAGE_ACCOUNT_KEY" \
               --services b \
-              --methods "$METHODS" \
+              --methods $METHODS \
               --origins "$ALL_ORIGINS" \
               --allowed-headers "$ALLOWED_HEADERS" \
               --exposed-headers "$EXPOSED_HEADERS" \
@@ -125,7 +125,7 @@ runs:
               --account-name "$STORAGE_ACCOUNT" \
               --account-key "$STORAGE_ACCOUNT_KEY" \
               --services b \
-              --methods "$METHODS" \
+              --methods $METHODS \
               --origins "$ORIGIN" \
               --allowed-headers "$ALLOWED_HEADERS" \
               --exposed-headers "$EXPOSED_HEADERS" \
