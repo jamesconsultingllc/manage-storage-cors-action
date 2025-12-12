@@ -87,8 +87,8 @@ runs:
 
           echo "Adding CORS rule for $ORIGIN"
 
-          # Strip spaces from methods for Azure CLI
-          methods=$(echo "$METHODS" | tr -d ' ')
+          # Convert space-separated methods to comma-separated for Azure CLI
+          methods=$(echo "$METHODS" | tr ' ' ',')
 
           # Count existing rules (Azure allows max 5)
           RULE_COUNT=$(echo "$CORS_RULES" | jq '. | length' 2>/dev/null || echo "0")
